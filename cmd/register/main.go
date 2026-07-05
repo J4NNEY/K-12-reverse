@@ -13,9 +13,18 @@ import (
 	"github.com/verssache/chatgpt-creator/internal/email"
 	"github.com/verssache/chatgpt-creator/internal/register"
 	"github.com/verssache/chatgpt-creator/internal/ui"
+	"github.com/verssache/chatgpt-creator/internal/updater"
 )
 
 func main() {
+	// Tampilkan header
+	ui.ClearScreen()
+	ui.PrintBanner()
+
+	// Cek pembaruan otomatis
+	updater.CheckForUpdates()
+	fmt.Println()
+
 	// Ensure data directory exists
 	os.MkdirAll("data", 0755)
 
