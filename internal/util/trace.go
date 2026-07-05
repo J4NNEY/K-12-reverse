@@ -29,10 +29,10 @@ func MakeTraceHeaders() map[string]string {
 	spanIDInt := new(big.Int).SetBytes(spanID)
 
 	return map[string]string{
-		"traceparent":                traceparent,
-		"tracestate":                 tracestate,
-		"x-datadog-trace-id":         traceIDInt.String(),
-		"x-datadog-parent-id":        spanIDInt.String(),
+		"traceparent":                 traceparent,
+		"tracestate":                  tracestate,
+		"x-datadog-trace-id":          traceIDInt.String(),
+		"x-datadog-parent-id":         spanIDInt.String(),
 		"x-datadog-sampling-priority": "-1",
 	}
 }

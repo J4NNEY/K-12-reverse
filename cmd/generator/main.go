@@ -35,7 +35,7 @@ func main() {
 
 	// Calculate total combinations: 2^(n-1)
 	totalCombos := 1 << (n - 1)
-	
+
 	fmt.Printf("Generating %d dot-trick variations for %s...\n", totalCombos, rawEmail)
 
 	file, err := os.Create(outputFile)

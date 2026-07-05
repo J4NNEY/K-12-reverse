@@ -2,8 +2,9 @@ package config
 
 import (
 	"encoding/json"
-	"os"
 	"fmt"
+	"os"
+	"strings"
 )
 
 // GmailAccount holds the credentials and list file for a base Gmail
@@ -16,6 +17,7 @@ type GmailAccount struct {
 // Config holds the application configuration.
 type Config struct {
 	Proxy           string   `json:"proxy"`
+	ProxyList       []string `json:"proxy_list,omitempty"` // list of proxies for rotation
 	OutputFile      string   `json:"output_file"`
 	TokenOutputFile string   `json:"token_output_file"`
 	DefaultPassword string   `json:"default_password"`
@@ -29,12 +31,12 @@ type Config struct {
 }
 
 const (
-	DefaultProxy            = ""
-	DefaultOutputFile       = "results.txt"
-	DefaultTokenOutputFile  = "accounts.json"
-	DefaultConfigFilename   = "config.json"
-	DefaultPassword         = "" // Min 12 characters
-	DefaultDomainValue      = ""
+	DefaultProxy           = ""
+	DefaultOutputFile      = "results.txt"
+	DefaultTokenOutputFile = "accounts.json"
+	DefaultConfigFilename  = "config.json"
+	DefaultPassword        = "" // Min 12 characters
+	DefaultDomainValue     = ""
 )
 
 // DefaultConfigPath returns the default path to the config file.
@@ -46,6 +48,7 @@ func DefaultConfigPath() string {
 func Load(path string) (*Config, error) {
 	cfg := &Config{
 		Proxy:           DefaultProxy,
+		ProxyList:       []string{},
 		OutputFile:      "results.txt",
 		TokenOutputFile: DefaultTokenOutputFile,
 		DefaultPassword: DefaultPassword,
@@ -73,6 +76,9 @@ func Load(path string) (*Config, error) {
 	// Environment variable overrides
 	if proxy := os.Getenv("PROXY"); proxy != "" {
 		cfg.Proxy = proxy
+	}
+	if proxyList := os.Getenv("PROXY_LIST"); proxyList != "" {
+		cfg.ProxyList = strings.Split(proxyList, ",")
 	}
 
 	return cfg, nil

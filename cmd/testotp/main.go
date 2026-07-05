@@ -69,26 +69,32 @@ func main() {
 
 	for i := len(allMessages) - 1; i >= 0; i-- {
 		msg := allMessages[i]
-		
+
 		dateStr := msg.Envelope.Date.Format("15:04:05")
 		subject := msg.Envelope.Subject
-		
+
 		flags := []string{}
 		for _, f := range msg.Flags {
 			flags = append(flags, f)
 		}
-		
+
 		fmt.Printf("[%s] Subject: %s | Flags: %v\n", dateStr, subject, flags)
-		
+
 		// Check body for OTP
 		foundOTP := false
 		for _, body := range msg.Body {
-			if body == nil { continue }
+			if body == nil {
+				continue
+			}
 			mr, err := mail.CreateReader(body)
-			if err != nil { continue }
+			if err != nil {
+				continue
+			}
 			for {
 				p, err := mr.NextPart()
-				if err != nil { break }
+				if err != nil {
+					break
+				}
 				switch p.Header.(type) {
 				case *mail.InlineHeader:
 					b, _ := io.ReadAll(p.Body)

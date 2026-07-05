@@ -67,6 +67,7 @@ func AddBlacklistDomain(domain string) {
 	blacklistedDomains.Store(domain, true)
 	saveBlacklist()
 }
+
 // CreateTempEmail fetches a new temp email using a random profile and gofakeit names.
 func CreateTempEmail(defaultDomain string) (string, error) {
 	// If defaultDomain is set, skip fetching from generator.email

@@ -434,7 +434,7 @@ func (c *Client) RunRegister(emailAddr, password, name, birthdate string, k12Wor
 				return nil, fmt.Errorf("verification code failed after retry (%d): %v", status, data)
 			}
 		}
-		
+
 		c.print(fmt.Sprintf("Validate OTP Data: %v", data))
 
 		if u, ok := data["redirect_url"].(string); ok {
@@ -496,4 +496,3 @@ func (c *Client) randomDelay(low, high float64) {
 	delay := low + rand.Float64()*(high-low)
 	time.Sleep(time.Duration(delay * float64(time.Second)))
 }
-

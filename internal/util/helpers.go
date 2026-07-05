@@ -18,6 +18,7 @@ func RandStr(length int) string {
 	}
 	return string(b)
 }
+
 // GenerateUUID generates a random UUID.
 func GenerateUUID() string {
 	return uuid.New().String()

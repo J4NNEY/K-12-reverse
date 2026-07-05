@@ -3,8 +3,8 @@ package register
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	http "github.com/bogdanfinn/fhttp"
+	"io"
 	"net/url"
 	"strings"
 	"time"
@@ -47,10 +47,10 @@ func (c *Client) RunLogin(emailAddr, password string, k12WorkspaceIDs []string, 
 	needOTP := false
 
 	c.print(fmt.Sprintf("Final Login URL: %s", finalURL))
-	
+
 	if strings.Contains(finalPath, "login/password") || strings.Contains(finalPath, "create-account/password") || strings.Contains(finalPath, "log-in/password") {
 		c.print("Entering password for login...")
-		
+
 		state := u.Query().Get("state")
 		c.print(fmt.Sprintf("Login State Parameter: %s", state))
 		status, data, err := c.loginPassword(emailAddr, password, state)
@@ -60,13 +60,13 @@ func (c *Client) RunLogin(emailAddr, password string, k12WorkspaceIDs []string, 
 		if status != 200 {
 			return nil, fmt.Errorf("password login failed (%d): %v", status, data)
 		}
-		
+
 		if u, ok := data["redirect_url"].(string); ok {
 			cbURL = u
 		} else if u, ok := data["continue_url"].(string); ok {
 			cbURL = u
 		}
-		
+
 		// Sometimes it might require OTP after password
 		if cbURL != "" && (strings.Contains(cbURL, "email-verification") || strings.Contains(cbURL, "email-otp")) {
 			c.print("Login requires 2FA / OTP verification.")
@@ -114,7 +114,7 @@ func (c *Client) RunLogin(emailAddr, password string, k12WorkspaceIDs []string, 
 		if status != 200 {
 			return nil, fmt.Errorf("login OTP verification failed (%d): %v", status, data)
 		}
-		
+
 		c.print(fmt.Sprintf("Validate OTP Data: %v", data))
 		if u, ok := data["redirect_url"].(string); ok {
 			cbURL = u
@@ -157,7 +157,7 @@ func (c *Client) loginPassword(email, password, state string) (int, map[string]i
 	if state != "" {
 		loginURL += "?state=" + state
 	}
-	
+
 	payload := map[string]string{
 		"username": email,
 		"password": password,

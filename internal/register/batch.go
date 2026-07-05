@@ -24,6 +24,7 @@ type BatchConfig struct {
 	OutputFile      string
 	MaxWorkers      int
 	Proxy           string
+	ProxyPool       *util.ProxyPool
 	DefaultPassword string
 	DefaultDomain   string
 	K12WorkspaceIDs []string
@@ -47,8 +48,16 @@ func getBaseEmail(emailAddr string) string {
 
 // registerOne handles a single account registration.
 func registerOne(workerID int, tag string, cfg *BatchConfig, registeredEmails map[string]bool, printMu *sync.Mutex) (bool, string, string, *TokenResult) {
-	client, err := NewClient(cfg.Proxy, tag, workerID, printMu, &fileMutex)
+	proxy := cfg.Proxy
+	if cfg.ProxyPool != nil {
+		proxy = cfg.ProxyPool.Next()
+	}
+
+	client, err := NewClient(proxy, tag, workerID, printMu, &fileMutex)
 	if err != nil {
+		if cfg.ProxyPool != nil && proxy != "" {
+			cfg.ProxyPool.MarkFailure(proxy)
+		}
 		return false, "", fmt.Sprintf("failed to create client: %v", err), nil
 	}
 
@@ -109,30 +118,45 @@ func registerOne(workerID int, tag string, cfg *BatchConfig, registeredEmails ma
 	}
 
 	tokenResult, err := client.RunRegister(emailAddr, password, firstName+" "+lastName, birthdate, cfg.K12WorkspaceIDs, gmailIMAP)
-	
+
 	if tokenResult != nil {
 		tokenResult.Password = password
 	}
 
 	if err != nil {
+		// Mark proxy failure for registration errors
+		if cfg.ProxyPool != nil && proxy != "" {
+			cfg.ProxyPool.MarkFailure(proxy)
+		}
+
 		// Handle Zombie auto-purge & Rescue
 		if cfg.GmailMode && (strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "profile") || strings.Contains(err.Error(), "log-in/password")) {
 			printMu.Lock()
 			fmt.Printf("[%s] 🔄 Zombie detected! Switching to Login Mode for %s...\n", time.Now().Format("15:04:05"), emailAddr)
 			printMu.Unlock()
-			
+
 			tokenResult, err = client.RunLogin(emailAddr, password, cfg.K12WorkspaceIDs, gmailIMAP)
 			if tokenResult != nil {
 				tokenResult.Password = password
 			}
-			
+
 			if err != nil {
 				cfg.GmailPool.MarkConsumed(emailAddr) // Shrink list
 				return false, emailAddr, "Zombie Login Failed: " + err.Error(), nil
 			}
+
+			// Zombie rescue succeeded, mark proxy success
+			if cfg.ProxyPool != nil && proxy != "" {
+				cfg.ProxyPool.MarkSuccess(proxy)
+			}
 		} else {
 			return false, emailAddr, err.Error(), nil
 		}
+	}
+
+	// Mark proxy success if using pool
+	if cfg.ProxyPool != nil && proxy != "" {
+		cfg.ProxyPool.MarkSuccess(proxy)
 	}
 
 	// Success! Mark consumed so it's removed from list
@@ -223,7 +247,7 @@ func RunBatch(cfg *BatchConfig) {
 					os.Remove(filepath.Join("data", "session.json"))
 					return
 				}
-				
+
 				sess := SessionData{
 					TotalAccounts: int64(cfg.TotalAccounts),
 					MaxWorkers:    cfg.MaxWorkers,
@@ -231,7 +255,7 @@ func RunBatch(cfg *BatchConfig) {
 					FailCount:     atomic.LoadInt64(&failureCount),
 					Remaining:     rem,
 				}
-				
+
 				data, _ := json.MarshalIndent(sess, "", "  ")
 				os.WriteFile(filepath.Join("data", "session.json"), data, 0644)
 			}
@@ -240,6 +264,10 @@ func RunBatch(cfg *BatchConfig) {
 
 	if cfg.GmailMode && cfg.GmailPool != nil {
 		fmt.Printf("📧 Multi-Gmail Mode: %d email addresses available in pool\n\n", cfg.GmailPool.Remaining())
+	}
+
+	if cfg.ProxyPool != nil && cfg.ProxyPool.Size() > 0 {
+		fmt.Printf("🌐 Proxy Pool: %d proxies loaded (%d healthy)\n\n", cfg.ProxyPool.Size(), cfg.ProxyPool.HealthyCount())
 	}
 
 	var wg sync.WaitGroup
@@ -262,7 +290,7 @@ func RunBatch(cfg *BatchConfig) {
 				if success {
 					atomic.AddInt64(&successCount, 1)
 					ts := time.Now().Format("15:04:05")
-					
+
 					printMu.Lock()
 					if cfg.GmailMode {
 						base := getBaseEmail(emailAddr)

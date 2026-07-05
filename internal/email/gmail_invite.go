@@ -105,7 +105,7 @@ func fetchInviteLinkFromGmail(cfg GmailIMAPConfig) (string, error) {
 						continue
 					}
 					bodyStr := string(b)
-					
+
 					re := regexp.MustCompile(`https://chatgpt\.com/k12-invite\?[^\s"'>]+`)
 					match := re.FindString(bodyStr)
 					if match != "" {
@@ -115,7 +115,7 @@ func fetchInviteLinkFromGmail(cfg GmailIMAPConfig) (string, error) {
 						seq := new(imap.SeqSet)
 						seq.AddNum(msg.SeqNum)
 						c.Store(seq, item, flags, nil)
-						
+
 						return match, nil
 					}
 				}

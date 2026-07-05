@@ -132,14 +132,14 @@ func fetchOTPFromGmail(cfg GmailIMAPConfig, targetEmail string, otpRegex *regexp
 		isForTarget := false
 		for _, toAddr := range msg.Envelope.To {
 			fullAddr := strings.ToLower(toAddr.MailboxName + "@" + toAddr.HostName)
-			
+
 			// EXACT MATCH ONLY: Ensures workers don't steal each other's emails
 			if strings.EqualFold(fullAddr, targetEmail) {
 				isForTarget = true
 				break
 			}
 		}
-		
+
 		if !isForTarget {
 			continue
 		}
@@ -169,7 +169,7 @@ func fetchOTPFromGmail(cfg GmailIMAPConfig, targetEmail string, otpRegex *regexp
 			if body == nil {
 				continue
 			}
-			
+
 			// We need a string of the body to parse MIME
 			mr, err := mail.CreateReader(body)
 			if err != nil {
@@ -196,13 +196,13 @@ func fetchOTPFromGmail(cfg GmailIMAPConfig, targetEmail string, otpRegex *regexp
 						continue
 					}
 					bodyStr := string(b)
-					
-					// Find all exact 6 digit numbers (we use [^a-zA-Z0-9] to match boundaries 
+
+					// Find all exact 6 digit numbers (we use [^a-zA-Z0-9] to match boundaries
 					// manually since HTML might not have \b where we expect)
 					// Find all exact 6 digit numbers using word boundaries and also handling HTML
 					re := regexp.MustCompile(`(?:^|[^a-zA-Z0-9])([0-9]{6})(?:[^a-zA-Z0-9]|$)`)
 					allMatches := re.FindAllStringSubmatch(bodyStr, -1)
-					
+
 					for _, m := range allMatches {
 						if len(m) > 1 {
 							code := m[1]
