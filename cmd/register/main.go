@@ -8,12 +8,16 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/verssache/chatgpt-creator/internal/config"
 	"github.com/verssache/chatgpt-creator/internal/email"
+	"github.com/verssache/chatgpt-creator/internal/healthcheck"
+	"github.com/verssache/chatgpt-creator/internal/manager"
 	"github.com/verssache/chatgpt-creator/internal/register"
 	"github.com/verssache/chatgpt-creator/internal/ui"
 	"github.com/verssache/chatgpt-creator/internal/updater"
+	"github.com/verssache/chatgpt-creator/internal/util"
 )
 
 func main() {
@@ -87,18 +91,21 @@ func main() {
 					}
 				}
 				
-				batchCfg := &register.BatchConfig{
-					TotalAccounts:   int(sess.Remaining),
-					OutputFile:      cfg.OutputFile,
-					MaxWorkers:      sess.MaxWorkers,
-					Proxy:           cfg.Proxy,
-					DefaultPassword: cfg.DefaultPassword,
-					DefaultDomain:   cfg.DefaultDomain,
-					K12WorkspaceIDs: k12WorkspaceIDs,
-					GmailMode:       cfg.GmailMode,
-					GmailPool:       gmailPool,
-					GmailAccounts:   cfg.GmailAccounts,
-				}
+			proxyPool := buildProxyPool(cfg)
+
+			batchCfg := &register.BatchConfig{
+				TotalAccounts:   int(sess.Remaining),
+				OutputFile:      cfg.OutputFile,
+				MaxWorkers:      sess.MaxWorkers,
+				Proxy:           cfg.Proxy,
+				ProxyPool:       proxyPool,
+				DefaultPassword: cfg.DefaultPassword,
+				DefaultDomain:   cfg.DefaultDomain,
+				K12WorkspaceIDs: k12WorkspaceIDs,
+				GmailMode:       cfg.GmailMode,
+				GmailPool:       gmailPool,
+				GmailAccounts:   cfg.GmailAccounts,
+			}
 				
 				os.Remove(sessionFile) // clear session to avoid infinite loop on crash
 				
@@ -134,6 +141,10 @@ func main() {
 			printHelpGuide(reader)
 		case "4":
 			exportTokensTXT(reader)
+		case "5":
+			runHealthCheck(cfg, reader)
+		case "6":
+			runAccountManager(reader)
 		case "0":
 			fmt.Println(ui.C("Goodbye! 👋", ui.Cyan))
 			return
@@ -198,11 +209,19 @@ func printMainMenu(cfg *config.Config) {
 
 	fmt.Println(ui.C("\n⚙️ [ GLOBAL SETTINGS ]", ui.Cyan))
 	if cfg.EnableK12Invite {
-		k12 := "(no ID)"
-		if len(cfg.K12WorkspaceIDs) > 0 {
-			k12 = cfg.K12WorkspaceIDs[0]
+		k12IDs := "(none)"
+		count := len(cfg.K12WorkspaceIDs)
+		if count > 0 {
+			if count == 1 {
+				k12IDs = cfg.K12WorkspaceIDs[0]
+			} else {
+				k12IDs = fmt.Sprintf("%s +%d more", cfg.K12WorkspaceIDs[0], count-1)
+			}
 		}
-		fmt.Printf(" - K12 Invite : ✅ %s (ID: %s)\n", ui.C("ENABLED", ui.Green), k12)
+		fmt.Printf(" - K12 Invite : ✅ %s (%d IDs)\n", ui.C("ENABLED", ui.Green), count)
+		if len(cfg.K12WorkspaceIDs) > 0 {
+			fmt.Printf("   └─ %s\n", k12IDs)
+		}
 	} else {
 		fmt.Printf(" - K12 Invite : ❌ %s\n", ui.C("DISABLED", ui.Red))
 	}
@@ -215,6 +234,9 @@ func printMainMenu(cfg *config.Config) {
 	if cfg.DefaultPassword != "" {
 		pwStr = "🔒 " + cfg.DefaultPassword
 	}
+	if len(cfg.ProxyList) > 0 {
+		proxyStr = fmt.Sprintf("🔄 Pool (%d proxies)", len(cfg.ProxyList))
+	}
 	fmt.Printf(" - Proxy      : %s\n", proxyStr)
 	fmt.Printf(" - Default PW : %s\n", pwStr)
 	fmt.Println(ui.C("────────────────────────────────────────────────────", ui.Cyan))
@@ -222,6 +244,8 @@ func printMainMenu(cfg *config.Config) {
 	fmt.Println(ui.C("🔧 [2] Edit Configuration & Gmail Accounts", ui.Yellow))
 	fmt.Println(ui.C("📚 [3] Bantuan & Panduan Penggunaan", ui.Cyan))
 	fmt.Println(ui.C("💾 [4] Export Semua Token ke TXT", ui.Purple))
+	fmt.Println(ui.C("🔍 [5] Health Check Akun (Cek Validitas Token)", ui.Purple))
+	fmt.Println(ui.C("📋 [6] Account Manager (List/Export/Delete)", ui.Blue))
 	fmt.Println(ui.C("❌ [0] Exit", ui.Red))
 	fmt.Println(ui.C("────────────────────────────────────────────────────", ui.Cyan))
 }
@@ -253,6 +277,187 @@ func printHelpGuide(reader *bufio.Reader) {
 
 	fmt.Println(ui.C("\n────────────────────────────────────────────────────", ui.Cyan))
 	fmt.Printf(ui.C("Tekan Enter untuk kembali ke Menu Utama...", ui.Yellow))
+	reader.ReadString('\n')
+}
+
+func runHealthCheck(cfg *config.Config, reader *bufio.Reader) {
+	fmt.Println(ui.C("\n=== Health Check Akun ===", ui.Cyan))
+
+	proxyPool := buildProxyPool(cfg)
+	proxy := cfg.Proxy
+	if proxyPool != nil {
+		proxy = proxyPool.Next()
+	}
+
+	fmt.Printf(ui.C("🔍 Mengecek validitas token dengan proxy: %s\n", ui.Yellow), proxy)
+	fmt.Println(ui.C("Hasil akan ditampilkan dalam beberapa detik...\n", ui.Yellow))
+
+	accounts, err := healthcheck.LoadAccounts("data")
+	if err != nil {
+		fmt.Printf(ui.C("⚠ Error loading accounts: %v\n", ui.Red), err)
+		fmt.Printf(ui.C("Tekan Enter untuk kembali...", ui.Yellow))
+		reader.ReadString('\n')
+		return
+	}
+
+	if len(accounts) == 0 {
+		fmt.Println(ui.C("⚠ Tidak ada akun yang ditemukan.", ui.Yellow))
+		fmt.Printf(ui.C("Tekan Enter untuk kembali...", ui.Yellow))
+		reader.ReadString('\n')
+		return
+	}
+
+	fmt.Printf("📦 Found %d accounts\n", len(accounts))
+
+	var wg sync.WaitGroup
+	workerCh := make(chan int, 5)
+	results := make([]*healthcheck.CheckResult, len(accounts))
+	var mu sync.Mutex
+
+	for i, token := range accounts {
+		wg.Add(1)
+		workerCh <- 1
+
+		go func(idx int, tk *register.TokenResult) {
+			defer wg.Done()
+			defer func() { <-workerCh }()
+
+			checker, err := healthcheck.NewChecker(proxy)
+			if err != nil {
+				mu.Lock()
+				results[idx] = &healthcheck.CheckResult{
+					Email:  tk.Email,
+					Status: healthcheck.StatusError,
+					Error:  fmt.Sprintf("checker init failed: %v", err),
+				}
+				mu.Unlock()
+				return
+			}
+
+			result := checker.CheckToken(tk)
+
+			mu.Lock()
+			results[idx] = result
+			mu.Unlock()
+
+			icon := "❓"
+			switch result.Status {
+			case healthcheck.StatusValid:
+				icon = "✅"
+			case healthcheck.StatusExpired:
+				icon = "⚠️"
+			case healthcheck.StatusRefreshed:
+				icon = "🔄"
+			case healthcheck.StatusError:
+				icon = "❌"
+			}
+			fmt.Printf("  %s %s\n", icon, tk.Email)
+		}(i, token)
+	}
+
+	wg.Wait()
+
+	healthcheck.PrintSummary(results)
+
+	fmt.Printf(ui.C("\nTekan Enter untuk kembali ke Menu Utama...", ui.Yellow))
+	reader.ReadString('\n')
+}
+
+func runAccountManager(reader *bufio.Reader) {
+	fmt.Println(ui.C("\n=== Account Manager ===", ui.Cyan))
+	fmt.Println("1. List Semua Akun")
+	fmt.Println("2. Export ke JSON")
+	fmt.Println("3. Export ke CSV")
+	fmt.Println("4. Export ke TXT")
+	fmt.Println("5. Hapus Akun")
+	fmt.Println("6. Statistik")
+	fmt.Println("0. Kembali")
+	fmt.Printf(ui.C("Pilih opsi: ", ui.Yellow))
+
+	optInput, _ := reader.ReadString('\n')
+	optInput = strings.TrimSpace(optInput)
+
+	switch optInput {
+	case "1":
+		entries, err := manager.LoadAllAccounts("data")
+		if err != nil {
+			fmt.Printf(ui.C("⚠ Error: %v\n", ui.Red), err)
+			break
+		}
+		manager.ListAccounts(entries, false)
+
+	case "2":
+		entries, err := manager.LoadAllAccounts("data")
+		if err != nil {
+			fmt.Printf(ui.C("⚠ Error: %v\n", ui.Red), err)
+			break
+		}
+		if err := manager.ExportAccounts(entries, "json", "export_tokens.json"); err != nil {
+			fmt.Printf(ui.C("⚠ Export failed: %v\n", ui.Red), err)
+		} else {
+			fmt.Printf(ui.C("✅ Exported to export_tokens.json\n", ui.Green))
+		}
+
+	case "3":
+		entries, err := manager.LoadAllAccounts("data")
+		if err != nil {
+			fmt.Printf(ui.C("⚠ Error: %v\n", ui.Red), err)
+			break
+		}
+		if err := manager.ExportAccounts(entries, "csv", "export_tokens.csv"); err != nil {
+			fmt.Printf(ui.C("⚠ Export failed: %v\n", ui.Red), err)
+		} else {
+			fmt.Printf(ui.C("✅ Exported to export_tokens.csv\n", ui.Green))
+		}
+
+	case "4":
+		entries, err := manager.LoadAllAccounts("data")
+		if err != nil {
+			fmt.Printf(ui.C("⚠ Error: %v\n", ui.Red), err)
+			break
+		}
+		if err := manager.ExportAccounts(entries, "txt", "export_tokens.txt"); err != nil {
+			fmt.Printf(ui.C("⚠ Export failed: %v\n", ui.Red), err)
+		} else {
+			fmt.Printf(ui.C("✅ Exported to export_tokens.txt\n", ui.Green))
+		}
+
+	case "5":
+		fmt.Printf(ui.C("Email akun yang akan dihapus: ", ui.Yellow))
+		emailInput, _ := reader.ReadString('\n')
+		emailInput = strings.TrimSpace(emailInput)
+		if emailInput == "" {
+			fmt.Println(ui.C("⚠ Email tidak boleh kosong.", ui.Red))
+			break
+		}
+		entries, err := manager.LoadAllAccounts("data")
+		if err != nil {
+			fmt.Printf(ui.C("⚠ Error: %v\n", ui.Red), err)
+			break
+		}
+		deleted, err := manager.DeleteAccount(entries, emailInput, "data")
+		if err != nil {
+			fmt.Printf(ui.C("⚠ Delete failed: %v\n", ui.Red), err)
+		} else if deleted {
+			fmt.Printf(ui.C("✅ Deleted: %s\n", ui.Green), emailInput)
+		}
+
+	case "6":
+		entries, err := manager.LoadAllAccounts("data")
+		if err != nil {
+			fmt.Printf(ui.C("⚠ Error: %v\n", ui.Red), err)
+			break
+		}
+		fmt.Println(manager.Stats(entries))
+
+	case "0":
+		return
+
+	default:
+		fmt.Println(ui.C("⚠ Invalid option.", ui.Red))
+	}
+
+	fmt.Printf(ui.C("\nTekan Enter untuk kembali ke Menu Utama...", ui.Yellow))
 	reader.ReadString('\n')
 }
 
@@ -410,15 +615,25 @@ func runSetupWizard(cfg *config.Config, reader *bufio.Reader) {
 	}
 
 	if cfg.EnableK12Invite {
-		currentK12 := ""
-		if len(cfg.K12WorkspaceIDs) > 0 {
-			currentK12 = cfg.K12WorkspaceIDs[0]
+		fmt.Println(ui.C("\n--- Multiple K12 Workspace IDs ---", ui.Yellow))
+		fmt.Println("Enter workspace IDs separated by commas (e.g., id1, id2, id3)")
+		currentK12 := strings.Join(cfg.K12WorkspaceIDs, ", ")
+		if currentK12 == "" {
+			currentK12 = "(none)"
 		}
-		fmt.Printf(ui.C(fmt.Sprintf("K12 Workspace ID (Tekan Enter buat biarin [%s], atau ketik ID baru): ", currentK12), ui.Yellow))
+		fmt.Printf(ui.C(fmt.Sprintf("Current: %s\n", currentK12), ui.Cyan))
+		fmt.Printf(ui.C("New IDs (Tekan Enter biarkan): ", ui.Yellow))
 		k12Input, _ := reader.ReadString('\n')
 		k12Input = strings.TrimSpace(k12Input)
 		if k12Input != "" {
-			cfg.K12WorkspaceIDs = []string{k12Input}
+			ids := strings.Split(k12Input, ",")
+			cfg.K12WorkspaceIDs = nil
+			for _, id := range ids {
+				id = strings.TrimSpace(id)
+				if id != "" {
+					cfg.K12WorkspaceIDs = append(cfg.K12WorkspaceIDs, id)
+				}
+			}
 		}
 	}
 
@@ -446,6 +661,20 @@ func runSetupWizard(cfg *config.Config, reader *bufio.Reader) {
 	if err := cfg.Save("config.json"); err != nil {
 		fmt.Printf(ui.C("⚠ Failed to save config.json: %v\n", ui.Red), err)
 	}
+}
+
+// buildProxyPool creates a proxy pool from config, falling back to single proxy.
+func buildProxyPool(cfg *config.Config) *util.ProxyPool {
+	var proxies []string
+	if len(cfg.ProxyList) > 0 {
+		proxies = cfg.ProxyList
+	} else if cfg.Proxy != "" {
+		proxies = []string{cfg.Proxy}
+	}
+	if len(proxies) == 0 {
+		return nil
+	}
+	return util.NewProxyPool(proxies)
 }
 
 func startRegistration(cfg *config.Config, reader *bufio.Reader) {
@@ -528,12 +757,15 @@ func startRegistration(cfg *config.Config, reader *bufio.Reader) {
 		return
 	}
 
+	proxyPool := buildProxyPool(cfg)
+
 	// Build batch config
 	batchCfg := &register.BatchConfig{
 		TotalAccounts:   totalAccounts,
 		OutputFile:      cfg.OutputFile,
 		MaxWorkers:      maxWorkers,
 		Proxy:           cfg.Proxy,
+		ProxyPool:       proxyPool,
 		DefaultPassword: cfg.DefaultPassword,
 		DefaultDomain:   cfg.DefaultDomain,
 		K12WorkspaceIDs: k12WorkspaceIDs,

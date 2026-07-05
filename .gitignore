@@ -7,4 +7,9 @@ chatgpt-creator
 # Config and Results
 results.txt
 blacklist.json
-results.txt
+
+# Compiled binaries
+*.exe
+
+# Generated export files
+export_tokens.*

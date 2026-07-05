@@ -5,19 +5,27 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	http "github.com/bogdanfinn/fhttp"
 	"github.com/verssache/chatgpt-creator/internal/email"
 )
 
-// TokenResult holds the extracted tokens for bulk export.
-type TokenResult struct {
+// WorkspaceToken holds tokens for a specific workspace.
+type WorkspaceToken struct {
 	AccessToken  string `json:"accessToken"`
 	RefreshToken string `json:"refreshToken"`
 	IdToken      string `json:"idToken"`
-	Email        string `json:"email"`
-	Password     string `json:"password"`
+	WorkspaceID  string `json:"workspaceId"`
+}
+
+// TokenResult holds the extracted tokens for bulk export.
+type TokenResult struct {
+	AccessToken     string                    `json:"accessToken"`
+	RefreshToken    string                    `json:"refreshToken"`
+	IdToken         string                    `json:"idToken"`
+	Email           string                    `json:"email"`
+	Password        string                    `json:"password"`
+	WorkspaceTokens map[string]*WorkspaceToken `json:"workspaceTokens,omitempty"` // keyed by workspace ID
 }
 
 // sessionResponse represents the ChatGPT session API response.
@@ -180,8 +188,24 @@ func (c *Client) RunK12Flow(workspaceIDs []string, emailAddr string, gmailIMAP *
 		return nil, fmt.Errorf("failed to get session: %w", err)
 	}
 
-	invited := false
-	invitedWsID := ""
+	// Build token result with initial session tokens
+	result := &TokenResult{
+		AccessToken:     session.AccessToken,
+		RefreshToken:    session.RefreshToken,
+		IdToken:         session.IdToken,
+		Email:           session.User.Email,
+		WorkspaceTokens: make(map[string]*WorkspaceToken),
+	}
+
+	if result.RefreshToken == "" {
+		result.RefreshToken = "not available"
+	}
+	if result.IdToken == "" {
+		result.IdToken = result.AccessToken
+	}
+
+	// Process all workspace IDs - try to invite and get tokens for each
+	lastSuccessWsID := ""
 	for _, wsID := range workspaceIDs {
 		wsID = strings.TrimSpace(wsID)
 		if wsID == "" {
@@ -190,62 +214,54 @@ func (c *Client) RunK12Flow(workspaceIDs []string, emailAddr string, gmailIMAP *
 
 		success, err := c.requestK12Invite(session.AccessToken, wsID)
 		if success {
-			c.print(fmt.Sprintf("✓ K12 invite request SUCCESS: %s", wsID))
-			invited = true
-			invitedWsID = wsID
-			break
-		}
-		if err != nil {
+			c.print(fmt.Sprintf("✓ K12 invite SUCCESS: %s", wsID))
+			lastSuccessWsID = wsID
+
+			// Switch to this workspace and get tokens
+			c.randomDelay(1.0, 2.0)
+			c.switchWorkspace(session.AccessToken, wsID)
+			c.randomDelay(1.0, 2.0)
+
+			wsSession, err := c.getSessionWithAccount(wsID)
+			if err == nil {
+				wsRefresh := wsSession.RefreshToken
+				if wsRefresh == "" {
+					wsRefresh = "not available"
+				}
+				wsIdToken := wsSession.IdToken
+				if wsIdToken == "" {
+					wsIdToken = wsSession.AccessToken
+				}
+
+				result.WorkspaceTokens[wsID] = &WorkspaceToken{
+					AccessToken:  wsSession.AccessToken,
+					RefreshToken: wsRefresh,
+					IdToken:      wsIdToken,
+					WorkspaceID:  wsID,
+				}
+				c.print(fmt.Sprintf("✓ Tokens extracted for workspace %s", wsID[:8]))
+			} else {
+				c.print(fmt.Sprintf("⚠ Failed to get session for workspace %s: %v", wsID[:8], err))
+			}
+		} else if err != nil {
 			c.print(fmt.Sprintf("✗ K12 invite failed [%s]: %v", wsID[:8], err))
 		}
 		c.randomDelay(0.3, 0.8)
 	}
 
-	if !invited {
-		c.print("⚠ All K12 invites failed, saving free-tier tokens")
-	} else {
-		c.print("✓ K12 invite successful, no email verification needed for K12.")
-	}
-
-	if invited {
-		c.print("Switching to K12 workspace...")
-		time.Sleep(2 * time.Second)
-
-		c.switchWorkspace(session.AccessToken, invitedWsID)
-		c.randomDelay(1.0, 2.0)
-
-		newSession, err := c.getSessionWithAccount(invitedWsID)
-		if err == nil {
-			session = newSession
-			c.print("✓ Switched to K12 workspace successfully")
-		} else {
-			c.print(fmt.Sprintf("⚠ Failed to switch workspace, trying regular session: %v", err))
-			newSession, err := c.getSession()
-			if err == nil {
-				session = newSession
-			}
+	// If at least one workspace succeeded, use its tokens as primary
+	if lastSuccessWsID != "" {
+		if wsTokens, ok := result.WorkspaceTokens[lastSuccessWsID]; ok {
+			result.AccessToken = wsTokens.AccessToken
+			result.RefreshToken = wsTokens.RefreshToken
+			result.IdToken = wsTokens.IdToken
+			c.print("✓ Primary tokens set to K12 workspace")
 		}
+	} else {
+		c.print("⚠ All K12 invites failed, using free-tier tokens")
 	}
 
-	// Step 4: Build token result
-	refreshToken := session.RefreshToken
-	if refreshToken == "" {
-		refreshToken = "not available"
-	}
-
-	idToken := session.IdToken
-	if idToken == "" {
-		idToken = session.AccessToken
-	}
-
-	result := &TokenResult{
-		AccessToken:  session.AccessToken,
-		RefreshToken: refreshToken,
-		IdToken:      idToken,
-		Email:        session.User.Email,
-	}
-
-	c.print(fmt.Sprintf("✓ Tokens extracted for %s", session.User.Email))
+	c.print(fmt.Sprintf("✓ Tokens extracted for %s", result.Email))
 	return result, nil
 }
 
